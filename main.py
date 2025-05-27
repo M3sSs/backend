@@ -7,6 +7,9 @@ from typing import List
 import shutil
 from pathlib import Path
 from fastapi import Form
+from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
+from PIL import Image
 # Constants
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DOWNLOAD_FOLDER = os.path.join(BASE_DIR, 'downloaded_images')
@@ -123,6 +126,40 @@ async def preview_image(image_id: str):
     
     return FileResponse(image_path, headers={"Content-Type": "image/jpeg"})
 
+@app.post("/search_similar_images/")
+async def search_similar_images(file: UploadFile = File(...), top_k: int = 10):
+    # Read and extract features from the uploaded image
+    try:
+        img = Image.open(file.file).convert("RGB").resize((64, 64))
+        input_vector = np.array(img).flatten().astype(float).reshape(1, -1)
+    except:
+        raise HTTPException(status_code=400, detail="Invalid image uploaded.")
+
+    # Fetch all image features from DB
+    image_data = list(collection.find({"features": {"$exists": True}}))
+    if not image_data:
+        raise HTTPException(status_code=500, detail="No feature data available in DB.")
+
+    features_list = [doc["features"] for doc in image_data]
+    feature_matrix = np.array(features_list)
+
+    # Compute cosine similarity
+    similarities = cosine_similarity(input_vector, feature_matrix)[0]
+    
+    # Get top K indices
+    top_indices = similarities.argsort()[-top_k:][::-1]
+    
+    similar_images = []
+    for idx in top_indices:
+        doc = image_data[idx]
+        similar_images.append({
+            "unique_id": doc["_id"],
+            "category": doc.get("category", "Unknown"),
+            "file_path": doc["file_path"],
+            "similarity": float(similarities[idx])
+        })
+
+    return similar_images
 # Add more routes as necessary (e.g., deleting images, etc.)
 
 # Running FastAPI:
